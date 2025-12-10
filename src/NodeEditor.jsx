@@ -262,7 +262,7 @@ export default function NodeEditor() {
     <div
       style={{
         width: "100%",
-        height: "100vh",
+        height: "100%",
         display: "flex",
         flexDirection: "column",
         background: "#1e1e1e",
@@ -291,7 +291,11 @@ export default function NodeEditor() {
         ref={svgRef}
         width="100%"
         height="100%"
-        style={{ flex: 1, background: "#252526" }}
+        style={{
+          flex: 1,
+          display: "block",
+          background: "#252526",
+        }}
         onMouseMove={handleSvgMouseMove}
         onMouseUp={handleSvgMouseUp}
       >

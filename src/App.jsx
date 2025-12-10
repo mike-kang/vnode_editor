@@ -2,7 +2,11 @@ import React from "react";
 import NodeEditor from "./NodeEditor";
 
 function App() {
-  return <NodeEditor />;
+  return (
+      <div style={{ width: "100vw", height: "100vh" }}>
+      <NodeEditor />
+    </div>
+    );
 }
 
 
