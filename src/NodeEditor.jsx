@@ -10,11 +10,8 @@ const genNodeId = createIdGenerator("node");
 const genPortId = createIdGenerator("port");
 const genEdgeId = createIdGenerator("edge");
 
-/**
- * 노드 에디터 메인 컴포넌트
- */
 export default function NodeEditor() {
-  // 노드, 포트, 엣지 상태 -----------------------------
+  // ---------------- 상태 ----------------
   const [nodes, setNodes] = useState(() => [
     {
       id: genNodeId(),
@@ -23,8 +20,8 @@ export default function NodeEditor() {
       width: 160,
       height: 80,
       title: "Node A",
-      inputs: [], // portId 배열
-      outputs: [],
+      inputs: [],   // portId 배열
+      outputs: [],  // portId 배열
     },
     {
       id: genNodeId(),
@@ -38,16 +35,25 @@ export default function NodeEditor() {
     },
   ]);
 
-  const [ports, setPorts] = useState([]); // {id, nodeId, side, index}
-  const [edges, setEdges] = useState([]); // {id, fromPortId, toPortId}
+  const [ports, setPorts] = useState([]);   // { id, nodeId, side }
+  const [edges, setEdges] = useState([]);   // { id, fromPortId, toPortId }
 
-  // 드래그 중인 임시 연결 상태 ------------------------
+  // 포트 드래그로 선 연결 중일 때
   const [draggingConnection, setDraggingConnection] = useState(null);
   // draggingConnection = { fromPortId, x, y }
 
+  // 노드 드래그 중일 때
+  const [draggingNode, setDraggingNode] = useState(null);
+  // draggingNode = { nodeId, offsetX, offsetY }
+
   const svgRef = useRef(null);
 
-  // 유틸: node에서 포트 위치 계산 ----------------------
+  // ---------------- 유틸 함수 ----------------
+  function getPortById(id) {
+    return ports.find((p) => p.id === id);
+  }
+
+  // 포트의 화면 상 위치 계산
   function getPortPosition(port) {
     const node = nodes.find((n) => n.id === port.nodeId);
     if (!node) return { x: 0, y: 0 };
@@ -57,46 +63,17 @@ export default function NodeEditor() {
     const index = list.indexOf(port.id);
 
     const spacing = 20;
-    const startY = node.y + 30; // 타이틀 아래쪽부터
+    const startY = node.y + 30; // 타이틀 아래부분부터 배치
     const y = startY + index * spacing;
     const x = isLeft ? node.x : node.x + node.width;
 
     return { x, y };
   }
 
-  function getPortById(id) {
-    return ports.find((p) => p.id === id);
-  }
-
-  // 노드에 포트 추가 -----------------------------------
+  // ---------------- 포트 추가/삭제 ----------------
   function addPort(nodeId, side) {
-    setNodes((prev) =>
-      prev.map((n) => {
-        if (n.id !== nodeId) return n;
-        const portId = genPortId();
-        if (side === "left") {
-          return { ...n, inputs: [...n.inputs, portId] };
-        } else {
-          return { ...n, outputs: [...n.outputs, portId] };
-        }
-      })
-    );
-
-    setPorts((prev) => [
-      ...prev,
-      {
-        id: genPortId(), // 포트 객체용 별도 id를 쓰고 싶다면 이렇게, 
-        // but 간단하게 node의 inputs/outputs에 저장하는 id와 동일하게 쓰고 싶으면 위와 맞춰도 됨.
-        // 여기선 간단하게 inputs/outputs에 저장되는 id를 그대로 쓰자.
-      },
-    ]);
-  }
-
-  // 위에서 포트 id를 두 번 생성했네? → 정리 버전
-  // 실제로는 addPort를 이렇게 다시 정의하는 게 깔끔하다:
-
-  function addPortFixed(nodeId, side) {
     const newPortId = genPortId();
+
     setNodes((prev) =>
       prev.map((n) => {
         if (n.id !== nodeId) return n;
@@ -107,28 +84,22 @@ export default function NodeEditor() {
         }
       })
     );
+
     setPorts((prev) => [
       ...prev,
       {
         id: newPortId,
         nodeId,
-        side, // 'left' | 'right'
+        side, // "left" | "right"
       },
     ]);
   }
 
-  // 위의 잘못된 addPort를 덮어씌우기 위해 한번 더 선언
-  // (JS 함수 선언 호이스팅 특성을 이용)
-  function addPort(nodeId, side) {
-    addPortFixed(nodeId, side);
-  }
-
-  // 포트 삭제 (우클릭) ---------------------------------
   function removePort(portId) {
     const port = getPortById(portId);
     if (!port) return;
 
-    // 노드에서 포트 제거
+    // 노드에서 포트 id 제거
     setNodes((prev) =>
       prev.map((n) => {
         if (n.id !== port.nodeId) return n;
@@ -140,10 +111,10 @@ export default function NodeEditor() {
       })
     );
 
-    // 포트 리스트에서 제거
+    // 포트 목록에서 제거
     setPorts((prev) => prev.filter((p) => p.id !== portId));
 
-    // 연결된 엣지 제거
+    // 엣지에서 제거
     setEdges((prev) =>
       prev.filter(
         (e) => e.fromPortId !== portId && e.toPortId !== portId
@@ -151,16 +122,16 @@ export default function NodeEditor() {
     );
   }
 
-  // 연결 생성 ------------------------------------------
+  // ---------------- 엣지(연결) ----------------
   function createEdge(fromPortId, toPortId) {
     const from = getPortById(fromPortId);
     const to = getPortById(toPortId);
     if (!from || !to) return;
 
-    // 같은 방향끼리 연결 금지 (왼↔왼, 오른↔오른)
+    // 같은 방향끼리 연결 금지
     if (from.side === to.side) return;
 
-    // 중복 연결 방지
+    // 이미 존재하는지 확인
     const exists = edges.some(
       (e) =>
         (e.fromPortId === fromPortId && e.toPortId === toPortId) ||
@@ -168,7 +139,7 @@ export default function NodeEditor() {
     );
     if (exists) return;
 
-    // 방향은 left → right 형태로 통일
+    // 방향을 left → right로 통일
     let realFrom = from;
     let realTo = to;
     if (from.side === "right") {
@@ -186,17 +157,18 @@ export default function NodeEditor() {
     ]);
   }
 
-  // 포트 클릭 & 드래그 시작 (좌클릭) --------------------
+  // ---------------- 포트 이벤트 ----------------
   function handlePortMouseDown(e, portId) {
     if (e.button !== 0) return; // 왼쪽 버튼만
     e.stopPropagation();
+
     const port = getPortById(portId);
     if (!port) return;
     const { x, y } = getPortPosition(port);
+
     setDraggingConnection({ fromPortId: portId, x, y });
   }
 
-  // 포트 위에서 마우스 업 → 연결 완료 시도 -------------
   function handlePortMouseUp(e, portId) {
     e.stopPropagation();
     if (!draggingConnection) return;
@@ -206,20 +178,22 @@ export default function NodeEditor() {
       setDraggingConnection(null);
       return;
     }
+
     createEdge(fromId, portId);
     setDraggingConnection(null);
   }
 
-  // 포트 우클릭 → 제거 --------------------------------
   function handlePortContextMenu(e, portId) {
     e.preventDefault();
     e.stopPropagation();
     removePort(portId);
   }
 
-  // SVG 배경에서 드래그 중: 임시 선 위치 업데이트 ------
-  function handleSvgMouseMove(e) {
-    if (!draggingConnection) return;
+  // ---------------- 노드 드래그 ----------------
+  function handleNodeMouseDown(e, nodeId) {
+    if (e.button !== 0) return; // 왼쪽 버튼만
+    e.stopPropagation();
+
     const svg = svgRef.current;
     if (!svg) return;
 
@@ -228,19 +202,53 @@ export default function NodeEditor() {
     pt.y = e.clientY;
     const cursor = pt.matrixTransform(svg.getScreenCTM().inverse());
 
-    setDraggingConnection((prev) =>
-      prev ? { ...prev, x: cursor.x, y: cursor.y } : null
-    );
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+
+    const offsetX = cursor.x - node.x;
+    const offsetY = cursor.y - node.y;
+
+    setDraggingNode({ nodeId, offsetX, offsetY });
   }
 
-  // SVG 배경에서 마우스 업 → 연결 취소 -----------------
-  function handleSvgMouseUp() {
+  // ---------------- SVG 배경 마우스 이벤트 ----------------
+  function handleSvgMouseMove(e) {
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const cursor = pt.matrixTransform(svg.getScreenCTM().inverse());
+
+    // 포트 드래그 중이면 임시 선 위치 갱신
     if (draggingConnection) {
-      setDraggingConnection(null);
+      setDraggingConnection((prev) =>
+        prev ? { ...prev, x: cursor.x, y: cursor.y } : null
+      );
+    }
+
+    // 노드 드래그 중이면 노드 위치 갱신
+    if (draggingNode) {
+      setNodes((prev) =>
+        prev.map((n) => {
+          if (n.id !== draggingNode.nodeId) return n;
+          return {
+            ...n,
+            x: cursor.x - draggingNode.offsetX,
+            y: cursor.y - draggingNode.offsetY,
+          };
+        })
+      );
     }
   }
 
-  // 노드 추가 버튼 (테스트용) ---------------------------
+  function handleSvgMouseUp() {
+    if (draggingConnection) setDraggingConnection(null);
+    if (draggingNode) setDraggingNode(null);
+  }
+
+  // ---------------- 노드 추가 버튼 ----------------
   function handleAddNode() {
     setNodes((prev) => [
       ...prev,
@@ -257,7 +265,7 @@ export default function NodeEditor() {
     ]);
   }
 
-  // 렌더링 ---------------------------------------------
+  // ---------------- 렌더링 ----------------
   return (
     <div
       style={{
@@ -283,7 +291,8 @@ export default function NodeEditor() {
         <span style={{ fontSize: 12, opacity: 0.8 }}>
           - 노드 좌/우 '+' 클릭: 포트 추가<br />
           - 포트 좌클릭 드래그 → 다른 쪽 포트에 놓으면 연결<br />
-          - 포트 우클릭 → 포트 삭제
+          - 포트 우클릭 → 포트 삭제<br />
+          - 노드 본문 드래그 → 노드 이동
         </span>
       </div>
 
@@ -291,11 +300,7 @@ export default function NodeEditor() {
         ref={svgRef}
         width="100%"
         height="100%"
-        style={{
-          flex: 1,
-          display: "block",
-          background: "#252526",
-        }}
+        style={{ flex: 1, display: "block", background: "#252526" }}
         onMouseMove={handleSvgMouseMove}
         onMouseUp={handleSvgMouseUp}
       >
@@ -307,7 +312,6 @@ export default function NodeEditor() {
           const p1 = getPortPosition(from);
           const p2 = getPortPosition(to);
 
-          // 약간 곡선으로 그려도 됨. 여기선 직선.
           return (
             <line
               key={edge.id}
@@ -342,7 +346,10 @@ export default function NodeEditor() {
 
         {/* 노드들 */}
         {nodes.map((node) => (
-          <g key={node.id}>
+          <g
+            key={node.id}
+            onMouseDown={(e) => handleNodeMouseDown(e, node.id)}
+          >
             {/* 노드 박스 */}
             <rect
               x={node.x}
@@ -354,6 +361,7 @@ export default function NodeEditor() {
               fill="#3c3c3c"
               stroke="#555"
               strokeWidth="1"
+              style={{ cursor: "move" }}
             />
             {/* 타이틀 */}
             <text
@@ -368,6 +376,7 @@ export default function NodeEditor() {
             {/* 왼쪽 + 버튼 */}
             <g
               onClick={() => addPort(node.id, "left")}
+              onMouseDown={(e) => e.stopPropagation()}
               style={{ cursor: "pointer" }}
             >
               <rect
@@ -394,6 +403,7 @@ export default function NodeEditor() {
             {/* 오른쪽 + 버튼 */}
             <g
               onClick={() => addPort(node.id, "right")}
+              onMouseDown={(e) => e.stopPropagation()}
               style={{ cursor: "pointer" }}
             >
               <rect
@@ -418,7 +428,7 @@ export default function NodeEditor() {
             </g>
 
             {/* 왼쪽 포트들 */}
-            {node.inputs.map((portId, idx) => {
+            {node.inputs.map((portId) => {
               const port = getPortById(portId);
               if (!port) return null;
               const { x, y } = getPortPosition(port);
@@ -440,7 +450,7 @@ export default function NodeEditor() {
             })}
 
             {/* 오른쪽 포트들 */}
-            {node.outputs.map((portId, idx) => {
+            {node.outputs.map((portId) => {
               const port = getPortById(portId);
               if (!port) return null;
               const { x, y } = getPortPosition(port);
