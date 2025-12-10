@@ -10,7 +10,7 @@ const genNodeId = createIdGenerator("node");
 const genPortId = createIdGenerator("port");
 const genEdgeId = createIdGenerator("edge");
 
-// 포트 간 간격, 타이틀 영역, 최소 높이 등 상수
+// ---- 레이아웃 상수들 ----
 const PORT_SPACING = 20;
 const PORT_START_OFFSET_Y = 30; // node.y 에서 포트 시작 offset
 const PORT_BOTTOM_MARGIN = 20;
@@ -21,41 +21,61 @@ function calcNodeHeight(inputCount, outputCount) {
   const maxPorts = Math.max(inputCount, outputCount);
   if (maxPorts <= 0) return NODE_MIN_HEIGHT;
 
-  // 마지막 포트까지 들어갈 수 있는 높이 계산
-  // y = PORT_START_OFFSET_Y + (maxPorts - 1) * PORT_SPACING
-  // 여기에 아래쪽 여유 margin 추가
   const needed =
     PORT_START_OFFSET_Y + (maxPorts - 1) * PORT_SPACING + PORT_BOTTOM_MARGIN;
 
   return Math.max(NODE_MIN_HEIGHT, needed);
 }
 
-export default function NodeEditor() {
-  // ---------------- 상태 ----------------
-  const [nodes, setNodes] = useState(() => [
+// ---- 초기 노드/포트 데이터 생성 (각 노드에 left/right 포트 1개씩) ----
+const initialData = (() => {
+  const n1Id = genNodeId();
+  const n2Id = genNodeId();
+
+  const p1L = genPortId();
+  const p1R = genPortId();
+  const p2L = genPortId();
+  const p2R = genPortId();
+
+  const h = calcNodeHeight(1, 1);
+
+  const nodes = [
     {
-      id: genNodeId(),
+      id: n1Id,
       x: 100,
       y: 100,
       width: 160,
-      height: NODE_MIN_HEIGHT,
+      height: h,
       title: "Node A",
-      inputs: [], // portId 배열
-      outputs: [],
+      inputs: [p1L],
+      outputs: [p1R],
     },
     {
-      id: genNodeId(),
+      id: n2Id,
       x: 400,
       y: 250,
       width: 160,
-      height: NODE_MIN_HEIGHT,
+      height: h,
       title: "Node B",
-      inputs: [],
-      outputs: [],
+      inputs: [p2L],
+      outputs: [p2R],
     },
-  ]);
+  ];
 
-  const [ports, setPorts] = useState([]); // { id, nodeId, side }
+  const ports = [
+    { id: p1L, nodeId: n1Id, side: "left" },
+    { id: p1R, nodeId: n1Id, side: "right" },
+    { id: p2L, nodeId: n2Id, side: "left" },
+    { id: p2R, nodeId: n2Id, side: "right" },
+  ];
+
+  return { nodes, ports };
+})();
+
+export default function NodeEditor() {
+  // ---------------- 상태 ----------------
+  const [nodes, setNodes] = useState(() => initialData.nodes);
+  const [ports, setPorts] = useState(() => initialData.ports);
   const [edges, setEdges] = useState([]); // { id, fromPortId, toPortId }
 
   const [draggingConnection, setDraggingConnection] = useState(null);
@@ -185,7 +205,7 @@ export default function NodeEditor() {
     // 같은 방향끼리 연결 금지
     if (from.side === to.side) return;
 
-    // 이미 연결되어 있으면 스킵
+    // 이미 존재하는지 확인
     const exists = edges.some(
       (e) =>
         (e.fromPortId === fromPortId && e.toPortId === toPortId) ||
@@ -302,18 +322,29 @@ export default function NodeEditor() {
 
   // ---------------- 노드 추가 ----------------
   function handleAddNode() {
+    const nodeId = genNodeId();
+    const leftPortId = genPortId();
+    const rightPortId = genPortId();
+    const height = calcNodeHeight(1, 1);
+
     setNodes((prev) => [
       ...prev,
       {
-        id: genNodeId(),
+        id: nodeId,
         x: 250,
         y: 400,
         width: 160,
-        height: NODE_MIN_HEIGHT,
+        height,
         title: "New Node",
-        inputs: [],
-        outputs: [],
+        inputs: [leftPortId],
+        outputs: [rightPortId],
       },
+    ]);
+
+    setPorts((prev) => [
+      ...prev,
+      { id: leftPortId, nodeId, side: "left" },
+      { id: rightPortId, nodeId, side: "right" },
     ]);
   }
 
@@ -341,6 +372,7 @@ export default function NodeEditor() {
       >
         <button onClick={handleAddNode}>노드 추가</button>
         <span style={{ fontSize: 12, opacity: 0.8 }}>
+          - 새 노드는 기본으로 좌/우 포트 1개씩 포함<br />
           - 노드 좌/우 '+' 클릭: 포트 추가 (많아지면 노드 높이 자동 증가)<br />
           - 포트 좌클릭 드래그 → 다른 쪽 포트에 놓으면 연결<br />
           - 포트 우클릭 → 포트 삭제 (노드 높이도 자동 조정)<br />
@@ -385,7 +417,7 @@ export default function NodeEditor() {
               {node.title}
             </text>
 
-            {/* 왼쪽 + 버튼 */}
+            {/* 왼쪽 + 버튼 - 노드 상단 */}
             <g
               onClick={() => addPort(node.id, "left")}
               onMouseDown={(e) => e.stopPropagation()}
@@ -412,7 +444,7 @@ export default function NodeEditor() {
               </text>
             </g>
 
-            {/* 오른쪽 + 버튼 */}
+            {/* 오른쪽 + 버튼 - 노드 상단 */}
             <g
               onClick={() => addPort(node.id, "right")}
               onMouseDown={(e) => e.stopPropagation()}
@@ -485,7 +517,7 @@ export default function NodeEditor() {
           </g>
         ))}
 
-        {/* 엣지(선) – 노드 위 레이어에, 이벤트는 투명 처리 */}
+        {/* 엣지(선) – 노드 위 레이어, 이벤트는 투명 처리 */}
         {edges.map((edge) => {
           const from = getPortById(edge.fromPortId);
           const to = getPortById(edge.toPortId);
