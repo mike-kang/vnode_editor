@@ -10,6 +10,26 @@ const genNodeId = createIdGenerator("node");
 const genPortId = createIdGenerator("port");
 const genEdgeId = createIdGenerator("edge");
 
+// 포트 간 간격, 타이틀 영역, 최소 높이 등 상수
+const PORT_SPACING = 20;
+const PORT_START_OFFSET_Y = 30; // node.y 에서 포트 시작 offset
+const PORT_BOTTOM_MARGIN = 20;
+const NODE_MIN_HEIGHT = 80;
+
+// 포트 개수에 따라 노드 높이 계산
+function calcNodeHeight(inputCount, outputCount) {
+  const maxPorts = Math.max(inputCount, outputCount);
+  if (maxPorts <= 0) return NODE_MIN_HEIGHT;
+
+  // 마지막 포트까지 들어갈 수 있는 높이 계산
+  // y = PORT_START_OFFSET_Y + (maxPorts - 1) * PORT_SPACING
+  // 여기에 아래쪽 여유 margin 추가
+  const needed =
+    PORT_START_OFFSET_Y + (maxPorts - 1) * PORT_SPACING + PORT_BOTTOM_MARGIN;
+
+  return Math.max(NODE_MIN_HEIGHT, needed);
+}
+
 export default function NodeEditor() {
   // ---------------- 상태 ----------------
   const [nodes, setNodes] = useState(() => [
@@ -18,31 +38,29 @@ export default function NodeEditor() {
       x: 100,
       y: 100,
       width: 160,
-      height: 80,
+      height: NODE_MIN_HEIGHT,
       title: "Node A",
-      inputs: [],   // portId 배열
-      outputs: [],  // portId 배열
+      inputs: [], // portId 배열
+      outputs: [],
     },
     {
       id: genNodeId(),
       x: 400,
       y: 250,
       width: 160,
-      height: 80,
+      height: NODE_MIN_HEIGHT,
       title: "Node B",
       inputs: [],
       outputs: [],
     },
   ]);
 
-  const [ports, setPorts] = useState([]);   // { id, nodeId, side }
-  const [edges, setEdges] = useState([]);   // { id, fromPortId, toPortId }
+  const [ports, setPorts] = useState([]); // { id, nodeId, side }
+  const [edges, setEdges] = useState([]); // { id, fromPortId, toPortId }
 
-  // 포트 드래그로 선 연결 중일 때
   const [draggingConnection, setDraggingConnection] = useState(null);
   // draggingConnection = { fromPortId, x, y }
 
-  // 노드 드래그 중일 때
   const [draggingNode, setDraggingNode] = useState(null);
   // draggingNode = { nodeId, offsetX, offsetY }
 
@@ -53,18 +71,20 @@ export default function NodeEditor() {
     return ports.find((p) => p.id === id);
   }
 
-  // 포트의 화면 상 위치 계산
+  function getNodeById(id) {
+    return nodes.find((n) => n.id === id);
+  }
+
+  // 포트의 화면 상 위치
   function getPortPosition(port) {
-    const node = nodes.find((n) => n.id === port.nodeId);
+    const node = getNodeById(port.nodeId);
     if (!node) return { x: 0, y: 0 };
 
     const isLeft = port.side === "left";
     const list = isLeft ? node.inputs : node.outputs;
     const index = list.indexOf(port.id);
 
-    const spacing = 20;
-    const startY = node.y + 30; // 타이틀 아래부분부터 배치
-    const y = startY + index * spacing;
+    const y = node.y + PORT_START_OFFSET_Y + index * PORT_SPACING;
     const x = isLeft ? node.x : node.x + node.width;
 
     return { x, y };
@@ -77,11 +97,27 @@ export default function NodeEditor() {
     setNodes((prev) =>
       prev.map((n) => {
         if (n.id !== nodeId) return n;
+
+        let newInputs = n.inputs;
+        let newOutputs = n.outputs;
+
         if (side === "left") {
-          return { ...n, inputs: [...n.inputs, newPortId] };
+          newInputs = [...n.inputs, newPortId];
         } else {
-          return { ...n, outputs: [...n.outputs, newPortId] };
+          newOutputs = [...n.outputs, newPortId];
         }
+
+        const newHeight = calcNodeHeight(
+          newInputs.length,
+          newOutputs.length
+        );
+
+        return {
+          ...n,
+          inputs: newInputs,
+          outputs: newOutputs,
+          height: newHeight,
+        };
       })
     );
 
@@ -99,15 +135,33 @@ export default function NodeEditor() {
     const port = getPortById(portId);
     if (!port) return;
 
-    // 노드에서 포트 id 제거
+    const { nodeId, side } = port;
+
+    // 노드에서 포트 제거 + 높이 재계산
     setNodes((prev) =>
       prev.map((n) => {
-        if (n.id !== port.nodeId) return n;
-        if (port.side === "left") {
-          return { ...n, inputs: n.inputs.filter((id) => id !== portId) };
+        if (n.id !== nodeId) return n;
+
+        let newInputs = n.inputs;
+        let newOutputs = n.outputs;
+
+        if (side === "left") {
+          newInputs = n.inputs.filter((id) => id !== portId);
         } else {
-          return { ...n, outputs: n.outputs.filter((id) => id !== portId) };
+          newOutputs = n.outputs.filter((id) => id !== portId);
         }
+
+        const newHeight = calcNodeHeight(
+          newInputs.length,
+          newOutputs.length
+        );
+
+        return {
+          ...n,
+          inputs: newInputs,
+          outputs: newOutputs,
+          height: newHeight,
+        };
       })
     );
 
@@ -131,7 +185,7 @@ export default function NodeEditor() {
     // 같은 방향끼리 연결 금지
     if (from.side === to.side) return;
 
-    // 이미 존재하는지 확인
+    // 이미 연결되어 있으면 스킵
     const exists = edges.some(
       (e) =>
         (e.fromPortId === fromPortId && e.toPortId === toPortId) ||
@@ -159,13 +213,13 @@ export default function NodeEditor() {
 
   // ---------------- 포트 이벤트 ----------------
   function handlePortMouseDown(e, portId) {
-    if (e.button !== 0) return; // 왼쪽 버튼만
+    if (e.button !== 0) return; // 왼쪽 버튼
     e.stopPropagation();
 
     const port = getPortById(portId);
     if (!port) return;
-    const { x, y } = getPortPosition(port);
 
+    const { x, y } = getPortPosition(port);
     setDraggingConnection({ fromPortId: portId, x, y });
   }
 
@@ -202,7 +256,7 @@ export default function NodeEditor() {
     pt.y = e.clientY;
     const cursor = pt.matrixTransform(svg.getScreenCTM().inverse());
 
-    const node = nodes.find((n) => n.id === nodeId);
+    const node = getNodeById(nodeId);
     if (!node) return;
 
     const offsetX = cursor.x - node.x;
@@ -211,7 +265,7 @@ export default function NodeEditor() {
     setDraggingNode({ nodeId, offsetX, offsetY });
   }
 
-  // ---------------- SVG 배경 마우스 이벤트 ----------------
+  // ---------------- SVG 배경 이벤트 ----------------
   function handleSvgMouseMove(e) {
     const svg = svgRef.current;
     if (!svg) return;
@@ -221,14 +275,12 @@ export default function NodeEditor() {
     pt.y = e.clientY;
     const cursor = pt.matrixTransform(svg.getScreenCTM().inverse());
 
-    // 포트 드래그 중이면 임시 선 위치 갱신
     if (draggingConnection) {
       setDraggingConnection((prev) =>
         prev ? { ...prev, x: cursor.x, y: cursor.y } : null
       );
     }
 
-    // 노드 드래그 중이면 노드 위치 갱신
     if (draggingNode) {
       setNodes((prev) =>
         prev.map((n) => {
@@ -248,7 +300,7 @@ export default function NodeEditor() {
     if (draggingNode) setDraggingNode(null);
   }
 
-  // ---------------- 노드 추가 버튼 ----------------
+  // ---------------- 노드 추가 ----------------
   function handleAddNode() {
     setNodes((prev) => [
       ...prev,
@@ -257,7 +309,7 @@ export default function NodeEditor() {
         x: 250,
         y: 400,
         width: 160,
-        height: 80,
+        height: NODE_MIN_HEIGHT,
         title: "New Node",
         inputs: [],
         outputs: [],
@@ -289,9 +341,9 @@ export default function NodeEditor() {
       >
         <button onClick={handleAddNode}>노드 추가</button>
         <span style={{ fontSize: 12, opacity: 0.8 }}>
-          - 노드 좌/우 '+' 클릭: 포트 추가<br />
+          - 노드 좌/우 '+' 클릭: 포트 추가 (많아지면 노드 높이 자동 증가)<br />
           - 포트 좌클릭 드래그 → 다른 쪽 포트에 놓으면 연결<br />
-          - 포트 우클릭 → 포트 삭제<br />
+          - 포트 우클릭 → 포트 삭제 (노드 높이도 자동 조정)<br />
           - 노드 본문 드래그 → 노드 이동
         </span>
       </div>
@@ -304,7 +356,7 @@ export default function NodeEditor() {
         onMouseMove={handleSvgMouseMove}
         onMouseUp={handleSvgMouseUp}
       >
-                {/* 노드들 */}
+        {/* 노드들 먼저 그리기 */}
         {nodes.map((node) => (
           <g
             key={node.id}
@@ -341,7 +393,7 @@ export default function NodeEditor() {
             >
               <rect
                 x={node.x - 18}
-                y={node.y + node.height / 2 - 10}
+                y={node.y + 4}
                 width="16"
                 height="16"
                 rx="3"
@@ -350,7 +402,7 @@ export default function NodeEditor() {
               />
               <text
                 x={node.x - 10}
-                y={node.y + node.height / 2 + 1}
+                y={node.y + 12}
                 textAnchor="middle"
                 alignmentBaseline="middle"
                 fill="#fff"
@@ -368,7 +420,7 @@ export default function NodeEditor() {
             >
               <rect
                 x={node.x + node.width + 2}
-                y={node.y + node.height / 2 - 10}
+                y={node.y + 4}
                 width="16"
                 height="16"
                 rx="3"
@@ -377,7 +429,7 @@ export default function NodeEditor() {
               />
               <text
                 x={node.x + node.width + 10}
-                y={node.y + node.height / 2 + 1}
+                y={node.y + 12}
                 textAnchor="middle"
                 alignmentBaseline="middle"
                 fill="#fff"
@@ -433,7 +485,7 @@ export default function NodeEditor() {
           </g>
         ))}
 
-        {/* 엣지(선) */}
+        {/* 엣지(선) – 노드 위 레이어에, 이벤트는 투명 처리 */}
         {edges.map((edge) => {
           const from = getPortById(edge.fromPortId);
           const to = getPortById(edge.toPortId);
@@ -450,7 +502,7 @@ export default function NodeEditor() {
               y2={p2.y}
               stroke="#8be9fd"
               strokeWidth="2"
-              pointerEvents="none"   // 🔹 이벤트 안 가로채게
+              pointerEvents="none"
             />
           );
         })}
@@ -470,12 +522,10 @@ export default function NodeEditor() {
               stroke="#ffb86c"
               strokeWidth="2"
               strokeDasharray="4 4"
-              pointerEvents="none"   // 🔹 이벤트 안 가로채게
+              pointerEvents="none"
             />
           );
         })()}
-
-
       </svg>
     </div>
   );
