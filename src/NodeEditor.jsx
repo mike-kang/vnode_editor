@@ -304,47 +304,7 @@ export default function NodeEditor() {
         onMouseMove={handleSvgMouseMove}
         onMouseUp={handleSvgMouseUp}
       >
-        {/* 엣지(선) */}
-        {edges.map((edge) => {
-          const from = getPortById(edge.fromPortId);
-          const to = getPortById(edge.toPortId);
-          if (!from || !to) return null;
-          const p1 = getPortPosition(from);
-          const p2 = getPortPosition(to);
-
-          return (
-            <line
-              key={edge.id}
-              x1={p1.x}
-              y1={p1.y}
-              x2={p2.x}
-              y2={p2.y}
-              stroke="#8be9fd"
-              strokeWidth="2"
-            />
-          );
-        })}
-
-        {/* 드래그 중 임시 선 */}
-        {draggingConnection && (() => {
-          const from = getPortById(draggingConnection.fromPortId);
-          if (!from) return null;
-          const start = getPortPosition(from);
-          const end = { x: draggingConnection.x, y: draggingConnection.y };
-          return (
-            <line
-              x1={start.x}
-              y1={start.y}
-              x2={end.x}
-              y2={end.y}
-              stroke="#ffb86c"
-              strokeWidth="2"
-              strokeDasharray="4 4"
-            />
-          );
-        })()}
-
-        {/* 노드들 */}
+                {/* 노드들 */}
         {nodes.map((node) => (
           <g
             key={node.id}
@@ -472,6 +432,50 @@ export default function NodeEditor() {
             })}
           </g>
         ))}
+
+        {/* 엣지(선) */}
+        {edges.map((edge) => {
+          const from = getPortById(edge.fromPortId);
+          const to = getPortById(edge.toPortId);
+          if (!from || !to) return null;
+          const p1 = getPortPosition(from);
+          const p2 = getPortPosition(to);
+
+          return (
+            <line
+              key={edge.id}
+              x1={p1.x}
+              y1={p1.y}
+              x2={p2.x}
+              y2={p2.y}
+              stroke="#8be9fd"
+              strokeWidth="2"
+              pointerEvents="none"   // 🔹 이벤트 안 가로채게
+            />
+          );
+        })}
+
+        {/* 드래그 중 임시 선 */}
+        {draggingConnection && (() => {
+          const from = getPortById(draggingConnection.fromPortId);
+          if (!from) return null;
+          const start = getPortPosition(from);
+          const end = { x: draggingConnection.x, y: draggingConnection.y };
+          return (
+            <line
+              x1={start.x}
+              y1={start.y}
+              x2={end.x}
+              y2={end.y}
+              stroke="#ffb86c"
+              strokeWidth="2"
+              strokeDasharray="4 4"
+              pointerEvents="none"   // 🔹 이벤트 안 가로채게
+            />
+          );
+        })()}
+
+
       </svg>
     </div>
   );
