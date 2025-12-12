@@ -272,6 +272,7 @@ export default function NodeEditor() {
 
   const svgRef = useRef(null);
 
+   const fileInputRef = useRef(null);
   // ---------------- 유틸 함수 ----------------
   function getPortById(id) {
     return ports.find((p) => p.id === id);
@@ -684,27 +685,42 @@ export default function NodeEditor() {
     URL.revokeObjectURL(url);
   }
 
-  // ---------------- Import 로직 ----------------
-  function handleImport() {
-    const text = window.prompt(
-      "텍스트 설정을 붙여넣으세요.\n(예: vcap@0 : { ... }  bind : { ... })",
-      ""
-    );
-    if (!text) return;
-
-    try {
-      const { nodes: newNodes, ports: newPorts, edges: newEdges } =
-        parseConfigText(text);
-
-      setNodes(newNodes);
-      setPorts(newPorts);
-      setEdges(newEdges);
-    } catch (e) {
-      console.error(e);
-      window.alert("파싱 중 오류가 발생했습니다.\n콘솔 로그를 확인하세요.");
+  // ---------------- Import (파일) 로직 ----------------
+  function handleImportFileClick() {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
     }
   }
 
+  function handleImportFileChange(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text =
+          typeof reader.result === "string"
+            ? reader.result
+            : new TextDecoder("utf-8").decode(reader.result);
+
+        const { nodes: newNodes, ports: newPorts, edges: newEdges } =
+          parseConfigText(text); // 🔸 앞에서 만든 파서 재사용
+
+        setNodes(newNodes);
+        setPorts(newPorts);
+        setEdges(newEdges);
+      } catch (err) {
+        console.error(err);
+        window.alert("파일 파싱 중 오류가 발생했습니다.\n콘솔 로그를 확인하세요.");
+      } finally {
+        // 같은 파일 다시 선택 가능하게 초기화
+        e.target.value = "";
+      }
+    };
+
+    reader.readAsText(file); // txt니까 그냥 text로 읽으면 됨
+  }
   // ---------------- 렌더링 ----------------
   return (
     <div
@@ -741,8 +757,9 @@ export default function NodeEditor() {
         >
           Export text
         </button>
-        <button onClick={handleImport}>Import text</button>
-
+        <button onClick={handleImportFileClick}>
+          Import text (file)
+        </button>
         <span style={{ fontSize: 12, opacity: 0.8, marginLeft: 16 }}>
           - Export: 현재 그래프를 설정 텍스트로 저장<br />
           - Import: 텍스트를 붙여넣어 그래프 복원<br />
@@ -750,6 +767,15 @@ export default function NodeEditor() {
         </span>
       </div>
 
+      {/* 🔹 숨겨진 파일 선택 input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".txt"
+        style={{ display: "none" }}
+        onChange={handleImportFileChange}
+      />
+      
       <svg
         ref={svgRef}
         width="100%"
