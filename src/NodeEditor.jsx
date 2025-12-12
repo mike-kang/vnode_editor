@@ -27,6 +27,235 @@ function calcNodeHeight(inputCount, outputCount) {
   return Math.max(NODE_MIN_HEIGHT, needed);
 }
 
+// title에서 index 추출: "vcap@3" -> 3
+function getIndexFromTitle(title) {
+  const parts = title.split("@");
+  if (parts.length !== 2) return 0;
+  const n = parseInt(parts[1], 10);
+  return Number.isNaN(n) ? 0 : n;
+}
+
+// title 생성: type + index -> "vcap@3"
+function makeTitle(type, index) {
+  return `${type}@${index}`;
+}
+
+// 타입 컬럼 순서
+const TYPE_COLUMNS = ["vcap", "vproc", "venc", "vdec", "vout"];
+
+// 텍스트 파서: Export 포맷을 다시 그래프로 복원
+// 텍스트 파서: Export 포맷을 다시 그래프로 복원
+function parseConfigText(text) {
+  const lines = text.split(/\r?\n/);
+
+  // title -> { title, type, inputCount, outputCount }
+  const nodeInfoMap = new Map();
+  const binds = []; // { srcTitle, srcIdx, dstTitle, dstIdx }
+  const internalConns = new Map(); // title -> [ { inIdx, outIdx } ]
+
+  let currentNodeTitle = null;
+  let inBind = false;
+
+  function ensureNodeInfo(title) {
+    if (!nodeInfoMap.has(title)) {
+      const type = title.split("@")[0];
+      nodeInfoMap.set(title, {
+        title,
+        type,
+        inputCount: 0,
+        outputCount: 0,
+      });
+    }
+    return nodeInfoMap.get(title);
+  }
+
+  for (let raw of lines) {
+    const line = raw.trim();
+    if (!line || line === "{" || line === "}") continue;
+
+    // bind 블록 진입
+    if (line.startsWith("bind")) {
+      inBind = true;
+      currentNodeTitle = null;
+      continue;
+    }
+
+    // bind 블록 처리
+    if (inBind) {
+      if (line.startsWith("}")) {
+        inBind = false;
+        continue;
+      }
+
+      // 예: vcap@0:0 -> vproc@0:0
+      const m = line.match(
+        /^([A-Za-z0-9_@]+)\s*:\s*(\d+)\s*->\s*([A-Za-z0-9_@]+)\s*:\s*(\d+)/
+      );
+      if (!m) continue;
+
+      const [, srcTitle, sIdxStr, dstTitle, dIdxStr] = m;
+      const srcIdx = parseInt(sIdxStr, 10);
+      const dstIdx = parseInt(dIdxStr, 10);
+      if (Number.isNaN(srcIdx) || Number.isNaN(dstIdx)) continue;
+
+      binds.push({ srcTitle, srcIdx, dstTitle, dstIdx });
+
+      const srcInfo = ensureNodeInfo(srcTitle);
+      const dstInfo = ensureNodeInfo(dstTitle);
+
+      if (srcInfo.outputCount < srcIdx + 1) srcInfo.outputCount = srcIdx + 1;
+      if (dstInfo.inputCount < dstIdx + 1) dstInfo.inputCount = dstIdx + 1;
+
+      continue;
+    }
+
+    // 노드 헤더: vcap@0 : {  혹은  vcap@0:{
+    const headerMatch = line.match(/^([A-Za-z0-9_@]+)\s*:/);
+    if (headerMatch && line.includes("{")) {
+      const title = headerMatch[1];
+      if (title === "bind") {
+        inBind = true;
+        currentNodeTitle = null;
+        continue;
+      }
+      currentNodeTitle = title;
+      ensureNodeInfo(title);
+      continue;
+    }
+
+    // 노드 블록 내부
+    if (currentNodeTitle) {
+      if (line.startsWith("},")) {
+        currentNodeTitle = null;
+        continue;
+      }
+      if (line.startsWith("}")) {
+        currentNodeTitle = null;
+        continue;
+      }
+
+      // 예:  0 -> 0   (노드 내부 in→out 연결)
+      const m = line.match(/^(\d+)\s*->\s*(\d+)/);
+      if (m) {
+        const inIdx = parseInt(m[1], 10);
+        const outIdx = parseInt(m[2], 10);
+        if (Number.isNaN(inIdx) || Number.isNaN(outIdx)) continue;
+
+        const info = ensureNodeInfo(currentNodeTitle);
+        if (info.inputCount < inIdx + 1) info.inputCount = inIdx + 1;
+        if (info.outputCount < outIdx + 1) info.outputCount = outIdx + 1;
+
+        if (!internalConns.has(currentNodeTitle)) {
+          internalConns.set(currentNodeTitle, []);
+        }
+        internalConns.get(currentNodeTitle).push({ inIdx, outIdx });
+      }
+
+      continue;
+    }
+  }
+
+  // ---- 여기서 nodeInfoMap + binds + internalConns 기반으로 실제 nodes/ports/edges 구성 ----
+  const newNodes = [];
+  const newPorts = [];
+  const newEdges = [];
+
+  const nodeTitleToId = new Map();
+  const inPortMap = new Map(); // "title:idx" -> portId
+  const outPortMap = new Map(); // "title:idx" -> portId
+
+  const infos = Array.from(nodeInfoMap.values()).sort((a, b) => {
+    if (a.type === b.type) {
+      return getIndexFromTitle(a.title) - getIndexFromTitle(b.title);
+    }
+    return a.type.localeCompare(b.type);
+  });
+
+  infos.forEach((info) => {
+    const nodeId = genNodeId();
+    nodeTitleToId.set(info.title, nodeId);
+
+    const inputs = [];
+    const outputs = [];
+
+    const inputCount = info.inputCount || 0;
+    const outputCount = info.outputCount || 0;
+
+    for (let i = 0; i < inputCount; i++) {
+      const pid = genPortId();
+      inputs.push(pid);
+      newPorts.push({ id: pid, nodeId, side: "left" });
+      inPortMap.set(`${info.title}:${i}`, pid);
+    }
+    for (let i = 0; i < outputCount; i++) {
+      const pid = genPortId();
+      outputs.push(pid);
+      newPorts.push({ id: pid, nodeId, side: "right" });
+      outPortMap.set(`${info.title}:${i}`, pid);
+    }
+
+    const height = calcNodeHeight(inputCount, outputCount);
+
+    // type/인덱스에 따라 대충 grid 배치
+    const TYPE_COLUMNS = ["vcap", "vproc", "venc", "vdec", "vout"];
+    const typeIndex = TYPE_COLUMNS.indexOf(info.type);
+    const col = typeIndex >= 0 ? typeIndex : TYPE_COLUMNS.length;
+    const row = getIndexFromTitle(info.title);
+
+    const baseX = 100;
+    const baseY = 80;
+    const dx = 220;
+    const dy = 90;
+
+    const x = baseX + col * dx;
+    const y = baseY + row * dy;
+
+    newNodes.push({
+      id: nodeId,
+      type: info.type,
+      title: info.title,
+      x,
+      y,
+      width: 160,
+      height,
+      inputs,
+      outputs,
+    });
+  });
+
+  // ---- 내부 연결(node 안) edge 생성 ----
+  internalConns.forEach((arr, title) => {
+    arr.forEach(({ inIdx, outIdx }) => {
+      const inPortId = inPortMap.get(`${title}:${inIdx}`);
+      const outPortId = outPortMap.get(`${title}:${outIdx}`);
+      if (!inPortId || !outPortId) return;
+
+      newEdges.push({
+        id: genEdgeId(),
+        // 방향은 output → input 으로 저장 (어차피 side로 구분할 수 있음)
+        fromPortId: outPortId,
+        toPortId: inPortId,
+      });
+    });
+  });
+
+  // ---- bind(노드 간 연결) edge 생성 ----
+  binds.forEach((b) => {
+    const srcPortId = outPortMap.get(`${b.srcTitle}:${b.srcIdx}`);
+    const dstPortId = inPortMap.get(`${b.dstTitle}:${b.dstIdx}`);
+    if (!srcPortId || !dstPortId) return;
+
+    newEdges.push({
+      id: genEdgeId(),
+      fromPortId: srcPortId,
+      toPortId: dstPortId,
+    });
+  });
+
+  return { nodes: newNodes, ports: newPorts, edges: newEdges };
+}
+
+
 export default function NodeEditor() {
   // ---------------- 상태 ----------------
   const [nodes, setNodes] = useState([]); // { id, type, title, x, y, width, height, inputs, outputs }
@@ -39,16 +268,9 @@ export default function NodeEditor() {
   const [draggingNode, setDraggingNode] = useState(null);
   // draggingNode = { nodeId, offsetX, offsetY }
 
-  const svgRef = useRef(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState(null); // X 버튼 표시용
 
-  // 타입별 index 카운터 (state로 안 두고 ref로 관리)
-  const typeCountersRef = useRef({
-    vcap: 0,
-    vproc: 0,
-    venc: 0,
-    vdec: 0,
-    vout: 0,
-  });
+  const svgRef = useRef(null);
 
   // ---------------- 유틸 함수 ----------------
   function getPortById(id) {
@@ -160,6 +382,64 @@ export default function NodeEditor() {
     );
   }
 
+  // ---------------- 노드 삭제 + index 재정렬 ----------------
+  function deleteNode(nodeId) {
+    const nodeToDelete = getNodeById(nodeId);
+    if (!nodeToDelete) return;
+
+    const { type, title, inputs, outputs } = nodeToDelete;
+    const deletedIndex = getIndexFromTitle(title);
+
+    const portsToRemove = [...inputs, ...outputs];
+
+    // 1) 포트/엣지 정리
+    setPorts((prevPorts) =>
+      prevPorts.filter((p) => !portsToRemove.includes(p.id))
+    );
+
+    setEdges((prevEdges) =>
+      prevEdges.filter(
+        (e) =>
+          !portsToRemove.includes(e.fromPortId) &&
+          !portsToRemove.includes(e.toPortId)
+      )
+    );
+
+    // 2) 노드들 정리 + 같은 type의 index 재정렬
+    setNodes((prevNodes) => {
+      // 우선 삭제 대상 제거
+      const remaining = prevNodes.filter((n) => n.id !== nodeId);
+
+      // 같은 type 중, index > deletedIndex 인 애들만 index - 1
+      return remaining.map((n) => {
+        if (n.type !== type) return n;
+
+        const idx = getIndexFromTitle(n.title);
+        if (idx > deletedIndex) {
+          const newIndex = idx - 1;
+          return {
+            ...n,
+            title: makeTitle(type, newIndex),
+          };
+        }
+        return n;
+      });
+    });
+  }
+
+  function handleDeleteNodeClick(e, nodeId) {
+    e.stopPropagation();
+    const node = getNodeById(nodeId);
+    if (!node) return;
+
+    const ok = window.confirm(
+      `노드 "${node.title}" 를 삭제할까요?\n(같은 type의 뒤 인덱스들이 앞으로 당겨집니다)`
+    );
+    if (!ok) return;
+
+    deleteNode(nodeId);
+  }
+
   // ---------------- 엣지(연결) ----------------
   function createEdge(fromPortId, toPortId) {
     const from = getPortById(fromPortId);
@@ -177,20 +457,13 @@ export default function NodeEditor() {
     );
     if (exists) return;
 
-    // 방향을 left → right로 통일
-    let realFrom = from;
-    let realTo = to;
-    if (from.side === "right") {
-      realFrom = to;
-      realTo = from;
-    }
-
+    // 방향은 여기서는 그대로 저장 (나중에 export 시 side로 판단)
     setEdges((prev) => [
       ...prev,
       {
         id: genEdgeId(),
-        fromPortId: realFrom.id,
-        toPortId: realTo.id,
+        fromPortId,
+        toPortId,
       },
     ]);
   }
@@ -291,18 +564,18 @@ export default function NodeEditor() {
     const rightPortId = genPortId();
     const height = calcNodeHeight(1, 1);
 
-    const index = typeCountersRef.current[type] || 0;
-    typeCountersRef.current[type] = index + 1;
-
-    const title = `${type}@${index}`;
+    // 현재 같은 type의 개수 = 다음 index
+    const sameTypeCount = nodes.filter((n) => n.type === type).length;
+    const index = sameTypeCount;
+    const title = makeTitle(type, index);
 
     setNodes((prev) => [
       ...prev,
       {
         id: nodeId,
-        type,        // "vcap" | "vproc" | "venc" | "vdec" | "vout"
-        title,       // 예: "vcap@0"
-        x: 200 + prev.length * 40, // 대충 옆으로 퍼지게 배치
+        type, // "vcap" | "vproc" | "venc" | "vdec" | "vout"
+        title, // 예: "vcap@0"
+        x: 200 + prev.length * 40,
         y: 120 + prev.length * 30,
         width: 160,
         height,
@@ -316,6 +589,120 @@ export default function NodeEditor() {
       { id: leftPortId, nodeId, side: "left" },
       { id: rightPortId, nodeId, side: "right" },
     ]);
+  }
+
+  // ---------------- Export 로직 ----------------
+  function buildExportText() {
+    const lines = [];
+    lines.push("{");
+
+    const sortedNodes = [...nodes].sort((a, b) => {
+      if (a.type === b.type) {
+        return getIndexFromTitle(a.title) - getIndexFromTitle(b.title);
+      }
+      return a.type.localeCompare(b.type);
+    });
+
+    // 노드 블록
+    sortedNodes.forEach((node, idx) => {
+      lines.push(`${node.title} : {`);
+
+      const inputCount = node.inputs.length;
+      const outputCount = node.outputs.length;
+
+      if (inputCount > 0 && outputCount > 0) {
+        for (let i = 0; i < inputCount; i++) {
+          let outIdx = 0;
+          if (outputCount > 0) {
+            outIdx = Math.min(i, outputCount - 1);
+          }
+          lines.push(`  ${i} -> ${outIdx}`);
+        }
+      }
+
+      lines.push("},");
+
+      if (idx === sortedNodes.length - 1) {
+        lines.push("");
+      }
+    });
+
+    // bind 블록
+    lines.push("bind : {");
+
+    edges.forEach((edge) => {
+      const pA = getPortById(edge.fromPortId);
+      const pB = getPortById(edge.toPortId);
+      if (!pA || !pB) return;
+
+      let outPort, inPort;
+      if (pA.side === "right" && pB.side === "left") {
+        outPort = pA;
+        inPort = pB;
+      } else if (pA.side === "left" && pB.side === "right") {
+        outPort = pB;
+        inPort = pA;
+      } else {
+        return;
+      }
+
+      const outNode = getNodeById(outPort.nodeId);
+      const inNode = getNodeById(inPort.nodeId);
+      if (!outNode || !inNode) return;
+
+      // 🔴 같은 node 내부 연결은 bind에 포함하지 않음
+      if (outNode.id === inNode.id) {
+        return;
+      }
+
+      const outIndex = outNode.outputs.indexOf(outPort.id);
+      const inIndex = inNode.inputs.indexOf(inPort.id);
+      if (outIndex < 0 || inIndex < 0) return;
+
+      lines.push(
+        `  ${outNode.title}:${outIndex} -> ${inNode.title}:${inIndex}`
+      );
+    });
+
+    lines.push("}");
+    lines.push("}");
+
+    return lines.join("\n");
+  }
+
+  function handleExport() {
+    const text = buildExportText();
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "node_graph.txt";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // ---------------- Import 로직 ----------------
+  function handleImport() {
+    const text = window.prompt(
+      "텍스트 설정을 붙여넣으세요.\n(예: vcap@0 : { ... }  bind : { ... })",
+      ""
+    );
+    if (!text) return;
+
+    try {
+      const { nodes: newNodes, ports: newPorts, edges: newEdges } =
+        parseConfigText(text);
+
+      setNodes(newNodes);
+      setPorts(newPorts);
+      setEdges(newEdges);
+    } catch (e) {
+      console.error(e);
+      window.alert("파싱 중 오류가 발생했습니다.\n콘솔 로그를 확인하세요.");
+    }
   }
 
   // ---------------- 렌더링 ----------------
@@ -348,12 +735,18 @@ export default function NodeEditor() {
         <button onClick={() => handleAddNodeOfType("vdec")}>vdec</button>
         <button onClick={() => handleAddNodeOfType("vout")}>vout</button>
 
+        <button
+          onClick={handleExport}
+          style={{ marginLeft: 24, fontWeight: "bold" }}
+        >
+          Export text
+        </button>
+        <button onClick={handleImport}>Import text</button>
+
         <span style={{ fontSize: 12, opacity: 0.8, marginLeft: 16 }}>
-          - 버튼 클릭 시 &lt;type&gt;@&lt;index&gt; 이름의 노드 생성 (예: vcap@0)<br />
-          - 노드 좌/우 '+' 클릭: 포트 추가 (많아지면 노드 높이 자동 증가)<br />
-          - 포트 좌클릭 드래그 → 다른 쪽 포트에 놓으면 연결<br />
-          - 포트 우클릭 → 포트 삭제 (노드 높이도 자동 조정)<br />
-          - 노드 본문 드래그 → 노드 이동
+          - Export: 현재 그래프를 설정 텍스트로 저장<br />
+          - Import: 텍스트를 붙여넣어 그래프 복원<br />
+          - bind에는 노드 간 연결만 (노드 내부 연결은 제외)
         </span>
       </div>
 
@@ -370,6 +763,10 @@ export default function NodeEditor() {
           <g
             key={node.id}
             onMouseDown={(e) => handleNodeMouseDown(e, node.id)}
+            onMouseEnter={() => setHoveredNodeId(node.id)}
+            onMouseLeave={() =>
+              setHoveredNodeId((prev) => (prev === node.id ? null : prev))
+            }
           >
             {/* 노드 박스 */}
             <rect
@@ -384,7 +781,8 @@ export default function NodeEditor() {
               strokeWidth="1"
               style={{ cursor: "move" }}
             />
-            {/* 타이틀 표시 */}
+
+            {/* 제목만 표시 (예: vcap@0) */}
             <text
               x={node.x + 8}
               y={node.y + 20}
@@ -393,6 +791,35 @@ export default function NodeEditor() {
             >
               {node.title}
             </text>
+
+            {/* X 삭제 버튼 (hover 시에만 표시) */}
+            {hoveredNodeId === node.id && (
+              <g
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => handleDeleteNodeClick(e, node.id)}
+                style={{ cursor: "pointer" }}
+              >
+                <rect
+                  x={node.x + node.width - 18}
+                  y={node.y + 4}
+                  width="14"
+                  height="14"
+                  rx="3"
+                  ry="3"
+                  fill="#aa0000"
+                />
+                <text
+                  x={node.x + node.width - 11}
+                  y={node.y + 13}
+                  textAnchor="middle"
+                  alignmentBaseline="middle"
+                  fill="#fff"
+                  fontSize="12"
+                >
+                  ×
+                </text>
+              </g>
+            )}
 
             {/* 왼쪽 + 버튼 - 노드 상단 */}
             <g
