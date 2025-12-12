@@ -10,7 +10,7 @@ const genNodeId = createIdGenerator("node");
 const genPortId = createIdGenerator("port");
 const genEdgeId = createIdGenerator("edge");
 
-// ---- 레이아웃 상수들 ----
+// ---- 레이아웃 상수 ----
 const PORT_SPACING = 20;
 const PORT_START_OFFSET_Y = 30; // node.y 에서 포트 시작 offset
 const PORT_BOTTOM_MARGIN = 20;
@@ -27,55 +27,10 @@ function calcNodeHeight(inputCount, outputCount) {
   return Math.max(NODE_MIN_HEIGHT, needed);
 }
 
-// ---- 초기 노드/포트 데이터 생성 (각 노드에 left/right 포트 1개씩) ----
-const initialData = (() => {
-  const n1Id = genNodeId();
-  const n2Id = genNodeId();
-
-  const p1L = genPortId();
-  const p1R = genPortId();
-  const p2L = genPortId();
-  const p2R = genPortId();
-
-  const h = calcNodeHeight(1, 1);
-
-  const nodes = [
-    {
-      id: n1Id,
-      x: 100,
-      y: 100,
-      width: 160,
-      height: h,
-      title: "Node A",
-      inputs: [p1L],
-      outputs: [p1R],
-    },
-    {
-      id: n2Id,
-      x: 400,
-      y: 250,
-      width: 160,
-      height: h,
-      title: "Node B",
-      inputs: [p2L],
-      outputs: [p2R],
-    },
-  ];
-
-  const ports = [
-    { id: p1L, nodeId: n1Id, side: "left" },
-    { id: p1R, nodeId: n1Id, side: "right" },
-    { id: p2L, nodeId: n2Id, side: "left" },
-    { id: p2R, nodeId: n2Id, side: "right" },
-  ];
-
-  return { nodes, ports };
-})();
-
 export default function NodeEditor() {
   // ---------------- 상태 ----------------
-  const [nodes, setNodes] = useState(() => initialData.nodes);
-  const [ports, setPorts] = useState(() => initialData.ports);
+  const [nodes, setNodes] = useState([]); // { id, type, title, x, y, width, height, inputs, outputs }
+  const [ports, setPorts] = useState([]); // { id, nodeId, side }
   const [edges, setEdges] = useState([]); // { id, fromPortId, toPortId }
 
   const [draggingConnection, setDraggingConnection] = useState(null);
@@ -85,6 +40,15 @@ export default function NodeEditor() {
   // draggingNode = { nodeId, offsetX, offsetY }
 
   const svgRef = useRef(null);
+
+  // 타입별 index 카운터 (state로 안 두고 ref로 관리)
+  const typeCountersRef = useRef({
+    vcap: 0,
+    vproc: 0,
+    venc: 0,
+    vdec: 0,
+    vout: 0,
+  });
 
   // ---------------- 유틸 함수 ----------------
   function getPortById(id) {
@@ -320,22 +284,28 @@ export default function NodeEditor() {
     if (draggingNode) setDraggingNode(null);
   }
 
-  // ---------------- 노드 추가 ----------------
-  function handleAddNode() {
+  // ---------------- 노드 추가 (타입별) ----------------
+  function handleAddNodeOfType(type) {
     const nodeId = genNodeId();
     const leftPortId = genPortId();
     const rightPortId = genPortId();
     const height = calcNodeHeight(1, 1);
 
+    const index = typeCountersRef.current[type] || 0;
+    typeCountersRef.current[type] = index + 1;
+
+    const title = `${type}@${index}`;
+
     setNodes((prev) => [
       ...prev,
       {
         id: nodeId,
-        x: 250,
-        y: 400,
+        type,        // "vcap" | "vproc" | "venc" | "vdec" | "vout"
+        title,       // 예: "vcap@0"
+        x: 200 + prev.length * 40, // 대충 옆으로 퍼지게 배치
+        y: 120 + prev.length * 30,
         width: 160,
         height,
-        title: "New Node",
         inputs: [leftPortId],
         outputs: [rightPortId],
       },
@@ -361,6 +331,7 @@ export default function NodeEditor() {
         fontFamily: "sans-serif",
       }}
     >
+      {/* 상단 툴바 */}
       <div
         style={{
           padding: "8px 12px",
@@ -370,9 +341,15 @@ export default function NodeEditor() {
           alignItems: "center",
         }}
       >
-        <button onClick={handleAddNode}>노드 추가</button>
-        <span style={{ fontSize: 12, opacity: 0.8 }}>
-          - 새 노드는 기본으로 좌/우 포트 1개씩 포함<br />
+        <span style={{ marginRight: 8 }}>Add node:</span>
+        <button onClick={() => handleAddNodeOfType("vcap")}>vcap</button>
+        <button onClick={() => handleAddNodeOfType("vproc")}>vproc</button>
+        <button onClick={() => handleAddNodeOfType("venc")}>venc</button>
+        <button onClick={() => handleAddNodeOfType("vdec")}>vdec</button>
+        <button onClick={() => handleAddNodeOfType("vout")}>vout</button>
+
+        <span style={{ fontSize: 12, opacity: 0.8, marginLeft: 16 }}>
+          - 버튼 클릭 시 &lt;type&gt;@&lt;index&gt; 이름의 노드 생성 (예: vcap@0)<br />
           - 노드 좌/우 '+' 클릭: 포트 추가 (많아지면 노드 높이 자동 증가)<br />
           - 포트 좌클릭 드래그 → 다른 쪽 포트에 놓으면 연결<br />
           - 포트 우클릭 → 포트 삭제 (노드 높이도 자동 조정)<br />
@@ -407,7 +384,7 @@ export default function NodeEditor() {
               strokeWidth="1"
               style={{ cursor: "move" }}
             />
-            {/* 타이틀 */}
+            {/* 타이틀 표시 */}
             <text
               x={node.x + 8}
               y={node.y + 20}
